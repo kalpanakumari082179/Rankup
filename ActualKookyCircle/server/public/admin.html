@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>RankUp Admin</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/css/app.css">
+  <style>
+    .admin-shell { display:flex; height:100vh; overflow:hidden; }
+    .admin-nav {
+      width:200px; min-width:200px; background:var(--surface);
+      border-right:1px solid var(--border); display:flex; flex-direction:column; padding:16px 8px;
+    }
+    .admin-nav-logo { font-family:var(--font-d); font-weight:700; font-size:16px; padding:8px; margin-bottom:12px; color:var(--red); }
+    .admin-main { flex:1; overflow-y:auto; padding:24px; }
+    .admin-table { width:100%; border-collapse:collapse; }
+    .admin-table th { text-align:left; font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--text-3); padding:8px 12px; border-bottom:1px solid var(--border); }
+    .admin-table td { padding:10px 12px; border-bottom:1px solid var(--border-2); font-size:13px; vertical-align:middle; }
+    .admin-table tr:hover td { background:var(--surface-2); }
+    .status-badge { display:inline-flex; align-items:center; gap:4px; padding:2px 8px; border-radius:99px; font-size:11px; font-weight:600; }
+    .status-pending  { background:var(--gold-dim);  color:var(--gold);  border:1px solid rgba(245,158,11,.2); }
+    .status-reviewed { background:var(--blue-dim);  color:var(--blue);  border:1px solid rgba(59,130,246,.2); }
+    .status-dismissed{ background:var(--surface-2); color:var(--text-3); border:1px solid var(--border); }
+    .status-banned   { background:var(--red-dim);   color:var(--red);   border:1px solid rgba(239,68,68,.2); }
+  </style>
+</head>
+<body>
+
+<!-- Login Screen -->
+<div id="admin-login" style="min-height:100vh;display:flex;align-items:center;justify-content:center;background:var(--bg)">
+  <div class="auth-card" style="max-width:380px">
+    <div class="auth-logo">
+      <div class="auth-logo-icon" style="background:var(--red)"><i class="bi bi-shield-lock-fill"></i></div>
+      <div><div class="auth-logo-text">RankUp Admin</div><div class="auth-tagline" style="color:var(--red)">Restricted Access</div></div>
+    </div>
+    <div class="auth-title">Admin Sign In</div>
+    <div id="login-error" class="form-error hidden"></div>
+    <div class="form-field">
+      <label class="form-label">Admin Password</label>
+      <input class="input" id="admin-pw" type="password" placeholder="••••••••">
+    </div>
+    <div class="form-field">
+      <label class="form-label">Authenticator Code</label>
+      <input class="input" id="admin-totp" type="text" placeholder="000000" maxlength="6" inputmode="numeric" autocomplete="one-time-code">
+      <div style="font-size:11px;color:var(--text-3);margin-top:4px">6-digit code from Google Authenticator</div>
+    </div>
+    <button class="btn btn-danger w-full mt" id="admin-login-btn" style="justify-content:center;background:var(--red);color:#fff;border-color:rgba(239,68,68,.3)">
+      <i class="bi bi-shield-lock"></i> Access Admin Panel
+    </button>
+  </div>
+</div>
+
+<!-- Admin Shell -->
+<div id="admin-shell" class="admin-shell hidden">
+  <nav class="admin-nav">
+    <div class="admin-nav-logo"><i class="bi bi-shield-fill"></i> Admin</div>
+    <a class="nav-link active" data-view="dashboard"><i class="bi bi-speedometer2"></i> Dashboard</a>
+    <a class="nav-link" data-view="users"><i class="bi bi-people"></i> Users</a>
+    <a class="nav-link" data-view="reports"><i class="bi bi-flag"></i> Reports</a>
+    <a class="nav-link" data-view="logs"><i class="bi bi-journal-text"></i> Audit Logs</a>
+    <div style="flex:1"></div>
+    <a class="nav-link text-red" id="admin-logout" style="color:var(--red)"><i class="bi bi-box-arrow-right"></i> Sign Out</a>
+  </nav>
+  <main class="admin-main" id="admin-main"></main>
+</div>
+
+<div id="toasts"></div>
+<div id="modal-overlay" class="modal-overlay hidden"><div id="modal-box" class="modal-box"></div></div>
+
+<script>
+let adminToken = null
+
+function toast(msg, type='info') {
+  const el = document.createElement('div')
+  el.className = `toast ${type}`
+  const icons = {success:'bi-check-circle-fill',error:'bi-x-circle-fill',info:'bi-info-circle-fill'}
+  el.innerHTML = `<i class="bi ${icons[type]}"></i><span>${msg}</span>`
+  document.getElementById('toasts').appendChild(el)
+  setTimeout(()=>el.remove(), 3000)
+}
+
+function adminFetch(path, opts={}) {
+  return fetch(`/api/admin${path}`, {
+    headers:{'Content-Type':'application/json','Authorization':`Bearer ${adminToken}`,...(opts.headers||{})},
+    ...opts, body:opts.body?JSON.stringify(opts.body):undefined,
+  }).then(async r=>{ const d=await r.json().catch(()=>({})); if(!r.ok) throw new Error(d.error||`HTTP ${r.status}`); return d })
+}
+
+function timeAgo(d) {
+  const diff=(Date.now()-new Date(d))/1000
+  if(diff<60) return 'just now'; if(diff<3600) return Math.floor(diff/60)+'m ago'
+  if(diff<86400) return Math.floor(diff/3600)+'h ago'; return Math.floor(diff/86400)+'d ago'
+}
+
+function avatarUrl(url, username) {
+  return url || `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(username||'U')}`
+}
+
+// ── LOGIN ──────────────────────────────────────────────────────────────────
+document.getElementById('admin-login-btn').addEventListener('click', async () => {
+  const password  = document.getElementById('admin-pw').value
+  const totpCode  = document.getElementById('admin-totp').value.trim()
+  const errEl     = document.getElementById('login-error')
+  const btn       = document.getElementById('admin-login-btn')
+
+  errEl.classList.add('hidden')
+  if (!password || !totpCode) { errEl.textContent='Fill in all fields'; errEl.classList.remove('hidden'); return }
+
+  btn.disabled = true; btn.textContent = 'Verifying…'
+  try {
+    const { token } = await fetch('/api/admin/login', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ password, totpCode }),
+    }).then(async r=>{ const d=await r.json(); if(!r.ok) throw new Error(d.error||'Failed'); return d })
+    adminToken = token
+    document.getElementById('admin-login').classList.add('hidden')
+    document.getElementById('admin-shell').classList.remove('hidden')
+    loadView('dashboard')
+  } catch(e) {
+    errEl.textContent = e.message || 'Invalid credentials'
+    errEl.classList.remove('hidden')
+    btn.disabled=false; btn.innerHTML='<i class="bi bi-shield-lock"></i> Access Admin Panel'
+  }
+})
+
+document.getElementById('admin-totp').addEventListener('keydown', e=>{ if(e.key==='Enter') document.getElementById('admin-login-btn').click() })
+
+// ── NAV ────────────────────────────────────────────────────────────────────
+document.getElementById('admin-nav')?.addEventListener('click',()=>{})
+document.querySelectorAll('[data-view]').forEach(link => {
+  link.addEventListener('click', ()=>{
+    document.querySelectorAll('[data-view]').forEach(l=>l.classList.remove('active'))
+    link.classList.add('active'); loadView(link.dataset.view)
+  })
+})
+document.getElementById('admin-logout').addEventListener('click', ()=>{
+  adminToken=null
+  document.getElementById('admin-shell').classList.add('hidden')
+  document.getElementById('admin-login').classList.remove('hidden')
+  document.getElementById('admin-pw').value=''
+  document.getElementById('admin-totp').value=''
+})
+
+// ── VIEWS ──────────────────────────────────────────────────────────────────
+function loadView(view) {
+  document.querySelectorAll('[data-view]').forEach(l=>l.classList.toggle('active',l.dataset.view===view))
+  const main = document.getElementById('admin-main')
+  main.innerHTML = '<div class="state-container"><div class="spinner"></div></div>'
+  if(view==='dashboard') loadDashboard(main)
+  else if(view==='users') loadUsers(main)
+  else if(view==='reports') loadReports(main)
+  else if(view==='logs') loadLogs(main)
+}
+
+// ── DASHBOARD ──────────────────────────────────────────────────────────────
+async function loadDashboard(main) {
+  try {
+    const { stats } = await adminFetch('/stats')
+    main.innerHTML = `
+      <div class="page-header"><h1 class="page-title" style="font-size:20px"><i class="bi bi-speedometer2 text-accent"></i> Dashboard</h1></div>
+      <div class="stat-grid" style="margin-bottom:24px">
+        <div class="stat-card"><div class="stat-value text-accent">${stats.total_users||0}</div><div class="stat-label">Total Users</div></div>
+        <div class="stat-card"><div class="stat-value text-gold">${stats.active_today||0}</div><div class="stat-label">Active Today</div></div>
+        <div class="stat-card"><div class="stat-value text-green">${stats.total_posts||0}</div><div class="stat-label">Total Posts</div></div>
+        <div class="stat-card"><div class="stat-value">${stats.total_games_played||0}</div><div class="stat-label">Games Played</div></div>
+        <div class="stat-card"><div class="stat-value">${stats.total_clans||0}</div><div class="stat-label">Clans</div></div>
+        <div class="stat-card"><div class="stat-value text-red">${stats.pending_reports||0}</div><div class="stat-label">Pending Reports</div></div>
+      </div>
+      ${stats.pending_reports>0?`
+        <div style="background:var(--red-dim);border:1px solid rgba(239,68,68,.2);border-radius:var(--r);padding:12px 16px;display:flex;align-items:center;gap:10px">
+          <i class="bi bi-exclamation-triangle-fill text-red"></i>
+          <span style="font-size:13px">${stats.pending_reports} report${stats.pending_reports>1?'s':''} need review</span>
+          <button class="btn btn-danger btn-sm" onclick="loadView('reports')" style="margin-left:auto">Review Now</button>
+        </div>
+      `:''}
+    `
+  } catch(e) { main.innerHTML = `<div class="state-container"><p class="text-dim">${e.message}</p></div>` }
+}
+
+// ── USERS ──────────────────────────────────────────────────────────────────
+async function loadUsers(main, search='', page=1) {
+  try {
+    const q = new URLSearchParams({ page, ...(search?{search}:{}) })
+    const { users, total, totalPages } = await adminFetch(`/users?${q}`)
+    main.innerHTML = `
+      <div class="page-header">
+        <h1 class="page-title" style="font-size:20px"><i class="bi bi-people text-accent"></i> Users <span style="font-size:14px;font-weight:400;color:var(--text-2)">(${total})</span></h1>
+      </div>
+      <div style="display:flex;gap:8px;margin-bottom:16px">
+        <input class="input" id="user-search" placeholder="Search by username or email…" value="${search}" style="max-width:300px">
+        <button class="btn btn-secondary btn-sm" id="user-search-btn"><i class="bi bi-search"></i></button>
+      </div>
+      <div class="card" style="padding:0;overflow:hidden">
+        <table class="admin-table">
+          <thead><tr>
+            <th>User</th><th>Email</th><th>Joined</th><th>Platform</th><th>Status</th><th>Actions</th>
+          </tr></thead>
+          <tbody>
+            ${users.map(u=>`
+              <tr>
+                <td style="display:flex;align-items:center;gap:8px">
+                  <img src="${avatarUrl(u.avatar_url,u.username)}" style="width:28px;height:28px;border-radius:50%;object-fit:cover">
+                  <span style="font-weight:600">${u.username}</span>
+                </td>
+                <td style="color:var(--text-2)">${u.email}</td>
+                <td style="color:var(--text-3)">${timeAgo(u.created_at)}</td>
+                <td style="color:var(--text-2)">${u.platform||'—'}</td>
+                <td>${u.is_banned?'<span class="status-badge status-banned"><i class="bi bi-slash-circle"></i> Banned</span>':'<span class="status-badge status-reviewed" style="background:var(--green-dim);color:var(--green);border-color:rgba(34,197,94,.2)"><i class="bi bi-check-circle"></i> Active</span>'}</td>
+                <td>
+                  <div style="display:flex;gap:4px">
+                    ${u.is_banned
+                      ? `<button class="btn btn-secondary btn-sm" onclick="unbanUser(${u.id},'${u.username}')"><i class="bi bi-person-check"></i> Unban</button>`
+                      : `<button class="btn btn-danger btn-sm" onclick="banUser(${u.id},'${u.username}')"><i class="bi bi-slash-circle"></i> Ban</button>`
+                    }
+                    <button class="btn btn-ghost btn-sm text-red" onclick="deleteUser(${u.id},'${u.username}')" title="Delete user"><i class="bi bi-trash3"></i></button>
+                  </div>
+                </td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+      ${totalPages>1?`<div style="display:flex;gap:6px;justify-content:center;margin-top:14px">
+        ${Array.from({length:totalPages},(_,i)=>`<button class="btn ${i+1===page?'btn-primary':'btn-secondary'} btn-sm" onclick="loadUsers(document.getElementById('admin-main'),document.getElementById('user-search').value,${i+1})">${i+1}</button>`).join('')}
+      </div>`:''}
+    `
+    main.querySelector('#user-search-btn').addEventListener('click',()=>loadUsers(main,main.querySelector('#user-search').value))
+    main.querySelector('#user-search').addEventListener('keydown',e=>{ if(e.key==='Enter') loadUsers(main,e.target.value) })
+  } catch(e){ main.innerHTML=`<div class="state-container"><p class="text-dim">${e.message}</p></div>` }
+}
+
+window.banUser = (id, username) => {
+  document.getElementById('modal-overlay').classList.remove('hidden')
+  document.getElementById('modal-box').innerHTML = `
+    <div class="modal-title"><i class="bi bi-slash-circle text-red"></i> Ban ${username}</div>
+    <div class="form-field"><label class="form-label">Reason</label>
+      <select class="input" id="ban-reason">
+        <option>Harassment</option><option>Spam</option><option>Cheating</option><option>Inappropriate content</option><option>Other</option>
+      </select>
+    </div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px">
+      <button class="btn btn-ghost" onclick="document.getElementById('modal-overlay').classList.add('hidden')">Cancel</button>
+      <button class="btn btn-danger" id="confirm-ban"><i class="bi bi-slash-circle"></i> Confirm Ban</button>
+    </div>
+  `
+  document.getElementById('confirm-ban').addEventListener('click', async()=>{
+    const reason=document.getElementById('ban-reason').value
+    try { await adminFetch(`/users/${id}/ban`,{method:'POST',body:{reason}}); document.getElementById('modal-overlay').classList.add('hidden'); toast(`${username} banned`,'success'); loadUsers(document.getElementById('admin-main')) } catch(e){toast(e.message,'error')}
+  })
+}
+
+window.unbanUser = async (id, username) => {
+  if(!confirm(`Unban ${username}?`)) return
+  try { await adminFetch(`/users/${id}/unban`,{method:'POST'}); toast(`${username} unbanned`,'success'); loadUsers(document.getElementById('admin-main')) } catch(e){toast(e.message,'error')}
+}
+
+window.deleteUser = async (id, username) => {
+  if(!confirm(`Permanently delete ${username}? This cannot be undone.`)) return
+  try { await adminFetch(`/users/${id}`,{method:'DELETE'}); toast(`${username} deleted`,'success'); loadUsers(document.getElementById('admin-main')) } catch(e){toast(e.message,'error')}
+}
+
+// ── REPORTS ────────────────────────────────────────────────────────────────
+async function loadReports(main, filter='pending') {
+  try {
+    const { reports } = await adminFetch(`/reports?status=${filter}`)
+    main.innerHTML = `
+      <div class="page-header"><h1 class="page-title" style="font-size:20px"><i class="bi bi-flag text-accent"></i> Reports</h1></div>
+      <div class="tabs" style="margin-bottom:16px">
+        <button class="tab-btn ${filter==='pending'?'active':''}" onclick="loadReports(document.getElementById('admin-main'),'pending')">Pending</button>
+        <button class="tab-btn ${filter==='reviewed'?'active':''}" onclick="loadReports(document.getElementById('admin-main'),'reviewed')">Reviewed</button>
+        <button class="tab-btn ${filter==='dismissed'?'active':''}" onclick="loadReports(document.getElementById('admin-main'),'dismissed')">Dismissed</button>
+      </div>
+      ${!reports.length?'<div class="state-container"><i class="bi bi-flag state-icon"></i><div class="state-title">No reports</div></div>':
+      `<div class="card" style="padding:0;overflow:hidden">
+        <table class="admin-table">
+          <thead><tr><th>Reporter</th><th>Type</th><th>Reason</th><th>Status</th><th>Date</th><th>Actions</th></tr></thead>
+          <tbody>
+            ${reports.map(r=>`
+              <tr>
+                <td><span style="font-weight:600">${r.reporter_username||'Unknown'}</span></td>
+                <td><span class="tag">${r.target_type}</span></td>
+                <td style="color:var(--text-2)">${r.reason}</td>
+                <td><span class="status-badge status-${r.status}">${r.status}</span></td>
+                <td style="color:var(--text-3)">${timeAgo(r.created_at)}</td>
+                <td>
+                  <div style="display:flex;gap:4px">
+                    ${r.status==='pending'?`
+                      <button class="btn btn-secondary btn-sm" onclick="updateReport(${r.id},'reviewed')"><i class="bi bi-check-lg"></i> Review</button>
+                      <button class="btn btn-ghost btn-sm" onclick="updateReport(${r.id},'dismissed')"><i class="bi bi-x-lg"></i> Dismiss</button>
+                    `:'<span style="font-size:12px;color:var(--text-3)">Done</span>'}
+                  </div>
+                </td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>`}
+    `
+  } catch(e){ main.innerHTML=`<div class="state-container"><p class="text-dim">${e.message}</p></div>` }
+}
+
+window.updateReport = async (id, status) => {
+  try { await adminFetch(`/reports/${id}`,{method:'PATCH',body:{status}}); toast('Report updated','success'); loadReports(document.getElementById('admin-main'),status) } catch(e){toast(e.message,'error')}
+}
+
+// ── LOGS ──────────────────────────────────────────────────────────────────
+async function loadLogs(main) {
+  try {
+    const { logs } = await adminFetch('/logs')
+    main.innerHTML = `
+      <div class="page-header"><h1 class="page-title" style="font-size:20px"><i class="bi bi-journal-text text-accent"></i> Audit Logs</h1></div>
+      <div class="card" style="padding:0;overflow:hidden">
+        <table class="admin-table">
+          <thead><tr><th>Action</th><th>Target</th><th>Notes</th><th>When</th></tr></thead>
+          <tbody>
+            ${logs.map(l=>`
+              <tr>
+                <td><span style="font-family:var(--font-m);font-size:12px;color:var(--accent-3)">${l.admin_action}</span></td>
+                <td style="color:var(--text-2)">${l.target_type} #${l.target_id}</td>
+                <td style="color:var(--text-2);font-size:12px">${l.notes||'—'}</td>
+                <td style="color:var(--text-3)">${timeAgo(l.created_at)}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+        ${!logs.length?'<div class="state-container" style="padding:30px"><i class="bi bi-journal state-icon"></i><p class="state-desc">No admin actions yet</p></div>':''}
+      </div>
+    `
+  } catch(e){ main.innerHTML=`<div class="state-container"><p class="text-dim">${e.message}</p></div>` }
+}
+</script>
+</body>
+</html>

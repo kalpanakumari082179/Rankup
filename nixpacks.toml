@@ -1,5 +1,0 @@
-[phases.install]
-cmds = ["cd ActualKookyCircle && npm install"]
-
-[start]
-cmd = "cd ActualKookyCircle && node server/index.js"

@@ -1,0 +1,5 @@
+[build]
+buildCommand = "cd ActualKookyCircle && npm install"
+
+[deploy]
+startCommand = "cd ActualKookyCircle && node server/index.js"
